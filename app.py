@@ -22,13 +22,10 @@ st.set_page_config(
     layout="wide",
 )
 
-# =============== 🔐 認証情報の直接埋め込み（確実な修正策） ===============
-# Secretsの設定ミスを防ぐため、ここに直接JSONデータを記述します。
-# 以前いただいたあなたのキー情報をセットしています。
-# =======================================================================
-
-CREDENTIALS_JSON_STR = """
-{
+# =========================================================================
+# 🔐 認証情報をここに直書きします（ファイル読み込みエラー回避の最終手段）
+# =========================================================================
+CLIENT_CONFIG = {
   "web": {
     "client_id": "518109148856-ndtiiuuh4tqt0v2jnu92iemmi8734d6d.apps.googleusercontent.com",
     "project_id": "kyotango-app",
@@ -38,12 +35,6 @@ CREDENTIALS_JSON_STR = """
     "client_secret": "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"
   }
 }
-"""
-
-# ファイルを強制的に作成・上書きする
-with open("credentials.json", "w") as f:
-    f.write(CREDENTIALS_JSON_STR.strip())
-
 # =========================================================================
 
 # Google Drive Imports
@@ -90,7 +81,6 @@ def init_db():
             renovation_cost INTEGER, roi REAL, details_json TEXT, legal_risks TEXT
         )
     ''')
-    # Schema Migration
     cols = [("renovation_cost", "INTEGER"), ("roi", "REAL"), ("details_json", "TEXT"), ("legal_risks", "TEXT")]
     for col, type_ in cols:
         try: c.execute(f"ALTER TABLE properties ADD COLUMN {col} {type_}")
@@ -248,12 +238,12 @@ with st.sidebar:
     api_key = st.text_input("API Key", value=default_api_key, type="password")
     
     st.markdown("---")
-    if DRIVE_ENABLED and os.path.exists('credentials.json'):
+    if DRIVE_ENABLED and CLIENT_CONFIG:
         st.success("✅ Google Drive連携可能")
     else:
         st.error("⚠️ Drive連携エラー")
     
-    st.info("Kyotango Property Platform v3.3 (Cloud Fix)")
+    st.info("Kyotango Property Platform v3.5")
     
     if "credentials" in st.session_state and st.session_state.credentials:
         if st.button("🚪 ログアウト", use_container_width=True):
@@ -261,7 +251,7 @@ with st.sidebar:
             if os.path.exists('token.json'): os.remove('token.json')
             st.rerun()
 
-# --- Login Logic (Cloud Compatible) ---
+# --- Login Logic (No-File OOB Flow) ---
 def check_login():
     if st.session_state.get("credentials") and st.session_state.credentials.valid: return True
     if os.path.exists('token.json'):
@@ -282,35 +272,40 @@ def login_ui():
     st.title("Kyotango Property Platform")
     st.info("👋 Googleアカウントでログインしてください")
     
-    if not os.path.exists('credentials.json'):
-        st.error("認証ファイルが見つかりません。")
-        return
-
-    # Cloud対応の手動ログインフロー
-    flow = InstalledAppFlow.from_client_secrets_file(
-        'credentials.json', SCOPES,
-        redirect_uri='urn:ietf:wg:oauth:2.0:oob' # Cloud用設定
-    )
-    
-    auth_url, _ = flow.authorization_url(prompt='consent')
-    
-    st.markdown(f"### 以下のリンクをクリックして認証コードを取得してください")
-    st.link_button("👉 Google認証ページを開く", auth_url)
-    
-    code = st.text_input("表示された長い認証コードをここに貼り付けてください:")
-    
-    if st.button("ログイン完了"):
-        if code:
-            try:
-                flow.fetch_token(code=code)
-                st.session_state.credentials = flow.credentials
-                with open('token.json', 'w') as token:
-                    token.write(flow.credentials.to_json())
-                st.rerun()
-            except Exception as e:
-                st.error(f"認証失敗: {e}")
-        else:
-            st.warning("コードを入力してください")
+    # ファイルではなく、辞書(CLIENT_CONFIG)から直接認証フローを作る
+    # redirect_uri に 'urn:ietf:wg:oauth:2.0:oob' を指定することで
+    # 400エラーを防ぎ、コピペ認証モードにします。
+    try:
+        flow = InstalledAppFlow.from_client_config(
+            CLIENT_CONFIG, 
+            SCOPES,
+            redirect_uri='urn:ietf:wg:oauth:2.0:oob'
+        )
+        
+        auth_url, _ = flow.authorization_url(prompt='consent')
+        
+        st.markdown(f"### 手順：")
+        st.markdown("1. 下のボタンを押してGoogle認証ページを開いてください。")
+        st.link_button("👉 Google認証ページを開く", auth_url)
+        st.markdown("2. ログインして許可すると、**長い認証コード**が表示されます。")
+        st.markdown("3. そのコードをコピーして、下の入力欄に貼り付けてください。")
+        
+        code = st.text_input("認証コードをここに貼り付け:")
+        
+        if st.button("ログイン完了"):
+            if code:
+                try:
+                    flow.fetch_token(code=code)
+                    st.session_state.credentials = flow.credentials
+                    with open('token.json', 'w') as token:
+                        token.write(flow.credentials.to_json())
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"認証失敗: コードが間違っているか、有効期限切れです。\nエラー: {e}")
+            else:
+                st.warning("コードを入力してください")
+    except Exception as e:
+        st.error(f"システムエラー: {e}")
 
 if not check_login():
     login_ui()
@@ -402,7 +397,7 @@ with tab_manage:
     df = get_all_properties()
     if st.session_state.view_mode == "list":
         if not df.empty:
-            # Map
+            # Map without clustering
             df['latitude'] = pd.to_numeric(df['latitude'], errors='coerce')
             valid_df = df[df['latitude'].notna()]
             
@@ -412,12 +407,14 @@ with tab_manage:
                 all_coords = []
                 for _, row in valid_df.iterrows():
                     color = "red" if row['status']=="購入済み" else "blue"
+                    # Add marker directly to map (No Cluster)
                     folium.Marker(
                         [row['latitude'], row['longitude']], 
                         popup=row['title'], 
                         icon=folium.Icon(color=color)
                     ).add_to(m_port)
                     all_coords.append([row['latitude'], row['longitude']])
+                
                 if all_coords: m_port.fit_bounds(all_coords)
                 st_folium(m_port, height=400, width="100%")
 
