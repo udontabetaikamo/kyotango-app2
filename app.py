@@ -8,6 +8,7 @@ import pandas as pd
 from datetime import datetime
 import io
 import re
+import ast  # 文字列を辞書に変換するためのライブラリ
 from streamlit_folium import st_folium
 import folium
 # MarkerCluster is intentionally removed to show all pins
@@ -22,14 +23,55 @@ st.set_page_config(
     layout="wide",
 )
 
-# =============== クラウド公開用：Secretsから認証ファイルを作成 ===============
-# これがないと、ネット上でGoogleログイン機能が動きません
+# =============== クラウド公開用：Secretsから認証ファイルを作成（最強版） ===============
+# どんな形式（JSON文字列、Python辞書文字列、TOMLオブジェクト）で来ても
+# 強制的に正しい credentials.json を生成するロジック
+# =================================================================================
+
+target_secret_key = None
+# Secretsのキー名がどちらでも対応できるようにする
 if "google_credentials_json" in st.secrets:
-    # ファイルが存在しない場合のみ作成
-    if not os.path.exists("credentials.json"):
-        with open("credentials.json", "w") as f:
-            # Secretsの文字列をそのままファイルに書き込む（一番確実な方法）
-            f.write(st.secrets["google_credentials_json"])
+    target_secret_key = "google_credentials_json"
+elif "gcp_service_account" in st.secrets:
+    target_secret_key = "gcp_service_account"
+
+if target_secret_key:
+    # 毎回作り直す（古い壊れたファイルを残さない）
+    with open("credentials.json", "w") as f:
+        raw_val = st.secrets[target_secret_key]
+        
+        try:
+            # ケース1: すでに辞書オブジェクトの場合（TOMLで正しくパースされた場合）
+            if isinstance(raw_val, dict):
+                json.dump(dict(raw_val), f)
+            
+            # ケース2: 文字列の場合
+            elif isinstance(raw_val, str):
+                raw_val = raw_val.strip()
+                # 2-A: 正しいJSON文字列（ダブルクォーテーション）の場合
+                try:
+                    parsed = json.loads(raw_val)
+                    json.dump(parsed, f)
+                except json.JSONDecodeError:
+                    # 2-B: Pythonの辞書文字列（シングルクォーテーション）の場合
+                    # StreamlitのSecretsはたまに勝手にシングルクォートに変換することがあるため
+                    try:
+                        parsed = ast.literal_eval(raw_val)
+                        json.dump(parsed, f)
+                    except:
+                        # 2-C: どうしようもない場合はそのまま書き込む
+                        f.write(raw_val)
+            
+            # ケース3: それ以外（リストなど）
+            else:
+                 json.dump(dict(raw_val), f)
+                 
+        except Exception as e:
+            print(f"Credentials creation warning: {e}")
+            # エラーが出ても、とりあえず書き込んでみる
+            if isinstance(raw_val, str):
+                f.write(raw_val)
+
 # =========================================================================
 
 # Google Drive Imports
@@ -421,7 +463,7 @@ with st.sidebar:
         st.error("⚠️ 必要なライブラリがインストールされていません")
     
     st.markdown("---")
-    st.info("Kyotango Property Platform v3.1")
+    st.info("Kyotango Property Platform v3.2")
     
     # Logout Button (Always show if credentials exist)
     if "credentials" in st.session_state and st.session_state.credentials:
@@ -763,10 +805,7 @@ with tab_manage:
             
             folium.LayerControl().add_to(m_portfolio)
             
-            # ------------------------------------------------------------------
-            # [FIXED] Marker Logic: NO MarkerCluster, Correct Indentation
-            # ------------------------------------------------------------------
-            
+            # NO CLUSTER - Show all pins
             all_coords = []
             
             for index, row in valid_df.iterrows():
@@ -802,16 +841,8 @@ with tab_manage:
             if all_coords:
                 m_portfolio.fit_bounds(all_coords)
 
-            # ------------------------------------------------------------------
-            
             # Render Map & Capture Click
             map_data = st_folium(m_portfolio, width="100%", height=400, returned_objects=["last_object_clicked"])
-
-            # Debug Info
-            with st.expander("🛠️ マップデバッグ情報"):
-                st.write(f"Valid Properties: {len(valid_df)}")
-                if not valid_df.empty:
-                    st.write(f"Bounds: [{min_lat}, {min_lon}] - [{max_lat}, {max_lon}]")
 
             # Handle Map Click
             if map_data and map_data.get("last_object_clicked"):
@@ -828,9 +859,6 @@ with tab_manage:
                     prop_id = clicked_prop.iloc[0]['id']
                     st.session_state.selected_property_id = int(prop_id)
                     st.toast(f"物件を選択しました: {clicked_prop.iloc[0]['title']}")
-                    # Optional: Auto-redirect
-                    # st.session_state.view_mode = "detail"
-                    # st.rerun()
             
             st.markdown("---")
             st.markdown("#### 📋 物件一覧")
