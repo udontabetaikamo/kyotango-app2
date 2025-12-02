@@ -15,6 +15,37 @@ from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
 import google.generativeai as genai
 
+# --- Page Config (Must be first) ---
+st.set_page_config(
+    page_title="Kyotango Property Platform",
+    page_icon="🏠",
+    layout="wide",
+)
+
+# =============== 🔐 認証情報の直接埋め込み（確実な修正策） ===============
+# Secretsの設定ミスを防ぐため、ここに直接JSONデータを記述します。
+# 以前いただいたあなたのキー情報をセットしています。
+# =======================================================================
+
+CREDENTIALS_JSON_STR = """
+{
+  "web": {
+    "client_id": "518109148856-ndtiiuuh4tqt0v2jnu92iemmi8734d6d.apps.googleusercontent.com",
+    "project_id": "kyotango-app",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+    "client_secret": "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"
+  }
+}
+"""
+
+# ファイルを強制的に作成・上書きする
+with open("credentials.json", "w") as f:
+    f.write(CREDENTIALS_JSON_STR.strip())
+
+# =========================================================================
+
 # Google Drive Imports
 try:
     from google.oauth2.credentials import Credentials
@@ -25,26 +56,6 @@ try:
     DRIVE_ENABLED = True
 except ImportError:
     DRIVE_ENABLED = False
-
-# --- Page Config ---
-st.set_page_config(
-    page_title="Kyotango Property Platform",
-    page_icon="🏠",
-    layout="wide",
-)
-
-# --- 🔐 認証情報（辞書として直接定義） ---
-# ファイルを介さず、この変数を直接認証に使います。エラーの元凶を断ち切ります。
-CLIENT_CONFIG = {
-  "web": {
-    "client_id": "518109148856-ndtiiuuh4tqt0v2jnu92iemmi8734d6d.apps.googleusercontent.com",
-    "project_id": "kyotango-app",
-    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-    "token_uri": "https://oauth2.googleapis.com/token",
-    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-    "client_secret": "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"
-  }
-}
 
 # --- Custom CSS ---
 st.markdown(
@@ -79,6 +90,7 @@ def init_db():
             renovation_cost INTEGER, roi REAL, details_json TEXT, legal_risks TEXT
         )
     ''')
+    # Schema Migration
     cols = [("renovation_cost", "INTEGER"), ("roi", "REAL"), ("details_json", "TEXT"), ("legal_risks", "TEXT")]
     for col, type_ in cols:
         try: c.execute(f"ALTER TABLE properties ADD COLUMN {col} {type_}")
@@ -236,12 +248,12 @@ with st.sidebar:
     api_key = st.text_input("API Key", value=default_api_key, type="password")
     
     st.markdown("---")
-    if DRIVE_ENABLED and CLIENT_CONFIG:
+    if DRIVE_ENABLED and os.path.exists('credentials.json'):
         st.success("✅ Google Drive連携可能")
     else:
         st.error("⚠️ Drive連携エラー")
     
-    st.info("Kyotango Property Platform v3.4 (File-less Auth)")
+    st.info("Kyotango Property Platform v3.3 (Cloud Fix)")
     
     if "credentials" in st.session_state and st.session_state.credentials:
         if st.button("🚪 ログアウト", use_container_width=True):
@@ -249,7 +261,7 @@ with st.sidebar:
             if os.path.exists('token.json'): os.remove('token.json')
             st.rerun()
 
-# --- Login Logic (File-less & Cloud Compatible) ---
+# --- Login Logic (Cloud Compatible) ---
 def check_login():
     if st.session_state.get("credentials") and st.session_state.credentials.valid: return True
     if os.path.exists('token.json'):
@@ -270,11 +282,14 @@ def login_ui():
     st.title("Kyotango Property Platform")
     st.info("👋 Googleアカウントでログインしてください")
     
-    # 【変更点】ファイルからではなく、辞書(CLIENT_CONFIG)から直接認証フローを作る
-    flow = InstalledAppFlow.from_client_config(
-        CLIENT_CONFIG, # 辞書を直接渡す
-        SCOPES,
-        redirect_uri='urn:ietf:wg:oauth:2.0:oob'
+    if not os.path.exists('credentials.json'):
+        st.error("認証ファイルが見つかりません。")
+        return
+
+    # Cloud対応の手動ログインフロー
+    flow = InstalledAppFlow.from_client_secrets_file(
+        'credentials.json', SCOPES,
+        redirect_uri='urn:ietf:wg:oauth:2.0:oob' # Cloud用設定
     )
     
     auth_url, _ = flow.authorization_url(prompt='consent')
