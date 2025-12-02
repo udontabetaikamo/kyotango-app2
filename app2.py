@@ -119,19 +119,64 @@ def login():
         st.error("⚠️ credentials.json が見つかりません。管理者にお問い合わせください。")
         return
 
-    if st.button("Googleアカウントでログイン", type="primary"):
+    # Determine Redirect URI
+    # Default to localhost for local testing, but allow override via Secrets for Cloud
+    redirect_uri = st.secrets.get("REDIRECT_URI", "http://localhost:8502")
+    
+    try:
         flow = InstalledAppFlow.from_client_secrets_file(
             'credentials.json', SCOPES,
-            redirect_uri='http://localhost:8502'
+            redirect_uri=redirect_uri
         )
+    except Exception as e:
+        st.error(f"Configuration Error: {e}")
+        return
+
+    # 1. Handle Callback (Auth Code in URL)
+    if "code" in st.query_params:
+        code = st.query_params["code"]
         try:
-            creds = flow.run_local_server(port=8502)
+            flow.fetch_token(code=code)
+            creds = flow.credentials
             st.session_state.credentials = creds
             with open('token.json', 'w') as token:
                 token.write(creds.to_json())
+            
+            # Clear query params to clean up URL
+            st.query_params.clear()
             st.rerun()
         except Exception as e:
-            st.error(f"Login failed: {e}")
+            st.error(f"Authentication failed: {e}")
+            st.warning("もう一度ログインボタンを押してください。")
+
+    # 2. Show Login Button (Link to Google Auth)
+    try:
+        auth_url, _ = flow.authorization_url(prompt='consent')
+        
+        st.markdown(f"""
+        <a href="{auth_url}" target="_self">
+            <button style="
+                background-color:#1D263B; 
+                color:#F5F5DC; 
+                padding:12px 24px; 
+                border:none; 
+                border-radius:4px; 
+                cursor:pointer;
+                font-weight:bold;
+                font-size:16px;
+                font-family: 'Hiragino Mincho ProN', serif;
+            ">
+                Googleアカウントでログイン
+            </button>
+        </a>
+        """, unsafe_allow_html=True)
+        
+        st.caption(f"Redirect URI: `{redirect_uri}`")
+        if "localhost" in redirect_uri:
+            st.warning("⚠️ 現在の設定はローカル開発用です。クラウドで動かす場合は、Secretsに `REDIRECT_URI` (アプリのURL) を設定してください。")
+            
+    except Exception as e:
+        st.error(f"Error generating auth link: {e}")
 
 # --- Database Functions ---
 DB_PATH = "real_estate.db"
@@ -232,10 +277,21 @@ def get_drive_service():
                     json.dump(convert_secrets_to_dict(st.secrets["gcp_service_account"]), f)
             
             if os.path.exists('credentials.json'):
-                flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-                creds = flow.run_local_server(port=8502)
-                with open('token.json', 'w') as token:
-                    token.write(creds.to_json())
+                # Determine Redirect URI (Same logic as login)
+                redirect_uri = st.secrets.get("REDIRECT_URI", "http://localhost:8502")
+                
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    'credentials.json', SCOPES,
+                    redirect_uri=redirect_uri
+                )
+                
+                # If we are here, it means we don't have a valid token.
+                # In the previous logic, we called run_local_server.
+                # But now we can't.
+                # If we are in the middle of a function call (like upload), we can't easily trigger the UI flow.
+                # So we should rely on the main login() function to handle auth.
+                # If get_drive_service returns None, the caller should handle it.
+                return None
             else:
                 return None
     return build('drive', 'v3', credentials=creds)
