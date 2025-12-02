@@ -1,43 +1,48 @@
 import streamlit as st
 import os
 import json
-import time # timeがないとエラーになることがあるので念のため
+import time
+import random
+import sqlite3
+import pandas as pd
+from datetime import datetime
+import io
+import re
+from streamlit_folium import st_folium
+import folium
+# MarkerCluster is intentionally removed to show all pins
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut
+import google.generativeai as genai
 
-# =============== 这里的（ここから） ===============
-# クラウド公開用：Secretsから認証ファイルを作成する魔法のコード
+# --- Page Config (Must be first) ---
+st.set_page_config(
+    page_title="Kyotango Property Platform",
+    page_icon="🏠",
+    layout="wide",
+)
+
+# =============== クラウド公開用：Secretsから認証ファイルを作成 ===============
 # これがないと、ネット上でGoogleログイン機能が動きません
 if "gcp_service_account" in st.secrets:
     # ファイルが存在しない場合のみ作成（上書き防止）
     if not os.path.exists("credentials.json"):
         with open("credentials.json", "w") as f:
             # Secretsの中身をJSONファイルとして書き出す
-            json.dump(dict(st.secrets["gcp_service_account"]), f)
-# =============== 这里的（ここまで）を追加 ===============
-
-# ↓ 元々のコードの続き...
-import random
-from streamlit_folium import st_folium
-# ... (以下変更なし)
-
-# ... 以下、元々の import ... から続く 
-
-# --- Imports ---
-import streamlit as st
-import random
-from streamlit_folium import st_folium
-import folium
-from folium.plugins import MarkerCluster
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut
-import google.generativeai as genai
-import json
-import os
-import time
-import sqlite3
-import pandas as pd
-from datetime import datetime
-import io
-import re # Added for robust geocoding
+            # st.secrets["gcp_service_account"] はTOMLのセクションですが、
+            # Streamlitが自動的に辞書としてパースしてくれている場合と、文字列の場合があります。
+            # ここでは文字列(JSON文字列)として貼り付けられたケースを想定して処理します。
+            try:
+                # もしSecretsにJSON文字列としてそのまま貼ってある場合
+                secret_str = st.secrets["gcp_service_account"]
+                if isinstance(secret_str, str) and secret_str.strip().startswith("{"):
+                     f.write(secret_str)
+                else:
+                     # TOMLテーブルとしてパースされている場合
+                     json.dump(dict(st.secrets["gcp_service_account"]), f)
+            except Exception as e:
+                print(f"Error creating credentials.json: {e}")
+# =========================================================================
 
 # Google Drive Imports
 try:
@@ -49,13 +54,6 @@ try:
     DRIVE_ENABLED = True
 except ImportError:
     DRIVE_ENABLED = False
-
-# --- Page Config ---
-st.set_page_config(
-    page_title="Kyotango Property Platform",
-    page_icon="🏠",
-    layout="wide",
-)
 
 # --- Custom CSS (Japanese Modern Design) ---
 st.markdown(
@@ -188,7 +186,6 @@ def get_all_properties():
     conn = sqlite3.connect(DB_PATH)
     df = pd.read_sql_query("SELECT * FROM properties ORDER BY created_at DESC", conn)
     conn.close()
-    conn.close()
     return df
 
 def update_property(id, field, value):
@@ -254,10 +251,6 @@ def get_or_create_folder(service, folder_name, parent_id=None):
         return items[0]['id']
 
 def upload_file_to_drive(file_obj, filename, property_address):
-    # if not DRIVE_ENABLED: # Removed check as we now enforce login
-    #    return "Drive library not installed."
-    
-
     try:
         service = get_drive_service_from_session() # Use session service
         if not service:
@@ -332,11 +325,10 @@ def get_coords_from_address(address):
 def analyze_investment_value(api_key, address, audio_file=None, extra_files=None, current_details=None):
     """
     Deep Analysis using Gemini 1.5 Flash.
-    Supports initial analysis (audio only) and re-analysis (extra files).
     """
     try:
         genai.configure(api_key=api_key)
-        model_name = "gemini-flash-latest"
+        model_name = "gemini-flash-latest" # Or "gemini-1.5-flash" depending on availability
         try:
             model = genai.GenerativeModel(model_name)
         except: pass
@@ -423,7 +415,12 @@ if "last_geocoded_address" not in st.session_state: st.session_state.last_geocod
 # --- Sidebar ---
 with st.sidebar:
     st.header("設定")
-    api_key = st.text_input("API Key (OpenAI / Gemini)", type="password", help="音声分析にはGemini APIキーが必要です")
+    # Cloud Secret API Key check
+    default_api_key = ""
+    if "GEMINI_API_KEY" in st.secrets:
+        default_api_key = st.secrets["GEMINI_API_KEY"]
+    
+    api_key = st.text_input("API Key (OpenAI / Gemini)", value=default_api_key, type="password", help="音声分析にはGemini APIキーが必要です")
     
     st.markdown("---")
     st.markdown("### Google Drive連携")
@@ -432,15 +429,11 @@ with st.sidebar:
             st.success("✅ 設定ファイル検出済み")
         else:
             st.warning("⚠️ credentials.json が見つかりません")
-            st.markdown("[GCP Console](https://console.cloud.google.com/) でOAuth設定を行い、`credentials.json` を配置してください。")
     else:
         st.error("⚠️ 必要なライブラリがインストールされていません")
     
     st.markdown("---")
-    st.info("Kyotango Property Platform v3.0")
-    
-    st.markdown("---")
-    st.info("Kyotango Property Platform v3.0")
+    st.info("Kyotango Property Platform v3.1")
     
     # Logout Button (Always show if credentials exist)
     if "credentials" in st.session_state and st.session_state.credentials:
@@ -482,7 +475,7 @@ def login():
     st.subheader("ログインが必要です")
     
     if not os.path.exists('credentials.json'):
-        st.error("⚠️ credentials.json が見つかりません。管理者にお問い合わせください。")
+        st.error("⚠️ credentials.json が見つかりません。Secrets設定を確認してください。")
         return
 
     if st.button("Googleアカウントでログイン", type="primary"):
@@ -490,10 +483,6 @@ def login():
             'credentials.json', SCOPES,
             redirect_uri='http://localhost:8502'
         )
-        # Note: In a real web app, this flow is different. 
-        # For local Streamlit, we use run_local_server or console flow.
-        # Since we are running in a headless env potentially, we might need console flow,
-        # but user asked for "login setting". Let's try local server first as it's standard for desktop apps.
         try:
             creds = flow.run_local_server(port=0)
             st.session_state.credentials = creds
@@ -524,7 +513,7 @@ with tab_scout:
         address_input = st.text_input("住所を入力してください（例：京丹後市網野町...）", value=st.session_state.address_val)
     with col_addr_2:
         if st.button("地図から取得"):
-            st.info("下の地図をクリックして住所を取得できます（未実装：地図クリック連携）")
+            st.info("下の地図をクリックして住所を取得できます")
     
     if address_input:
         st.session_state.address_val = address_input
@@ -532,7 +521,6 @@ with tab_scout:
         # Auto-Geocode (Only if address changed)
         if address_input != st.session_state.last_geocoded_address:
             coords = get_coords_from_address(address_input)
-            print(f"DEBUG: Coords returned: {coords}")
             if coords:
                 lat, lon, precision = coords
                 
@@ -549,7 +537,7 @@ with tab_scout:
                 st.session_state.last_geocoded_address = address_input
             else:
                 st.error("システムエラー: 座標取得ロジックが失敗しました。")
-                st.session_state.last_geocoded_address = address_input # Prevent infinite retry loop
+                st.session_state.last_geocoded_address = address_input 
 
         # Show map preview & Capture Click (Always show if address is present)
         st.markdown("##### 🗺️ 位置確認・修正")
@@ -561,7 +549,6 @@ with tab_scout:
         
         m_preview = folium.Map(location=[current_lat, current_lon], zoom_start=18, tiles=None, height=300)
         
-        # Add Layers
         # Add Layers
         folium.TileLayer('Esri.WorldImagery', name='衛星写真 (Satellite)', attr='Esri', show=True).add_to(m_preview)
         folium.TileLayer('CartoDB positron', name='戦略マップ (Strategic)', show=False).add_to(m_preview)
@@ -693,7 +680,6 @@ with tab_scout:
             lon = st.session_state.map_center[1]
             
             # Default coords check (approximate)
-            # Default coords check (approximate)
             if abs(lat - 35.62) < 0.01 and abs(lon - 135.06) < 0.01:
                 # Try to geocode again
                 coords = get_coords_from_address(st.session_state.address_val)
@@ -729,13 +715,11 @@ with tab_scout:
                     with open(os.path.join(img_dir, img_file.name), "wb") as f:
                         f.write(img_file.getbuffer())
                 
-                # Drive Backup (Images) - Optional enhancement
+                # Drive Backup (Images)
                 if DRIVE_ENABLED and os.path.exists('credentials.json'):
                     try:
                         drive_service = get_drive_service()
                         if drive_service:
-                            # Create folder for property if not exists (simplified for now, just upload to root or specific folder)
-                            # For now, just skipping complex Drive folder structure to keep it simple as per request
                             pass
                     except: pass
 
@@ -755,8 +739,7 @@ with tab_manage:
             # Global Map
             st.markdown("#### 🗺️ 全体マップ (戦略ビュー)")
             
-            # Filter for valid coordinates (exclude None, 0, and empty strings)
-            # Ensure lat/lon are numeric, coerce errors to NaN
+            # Filter for valid coordinates
             df['latitude'] = pd.to_numeric(df['latitude'], errors='coerce')
             df['longitude'] = pd.to_numeric(df['longitude'], errors='coerce')
 
@@ -770,11 +753,9 @@ with tab_manage:
                 min_lat, max_lat = valid_df['latitude'].min(), valid_df['latitude'].max()
                 min_lon, max_lon = valid_df['longitude'].min(), valid_df['longitude'].max()
                 
-                # Center is still useful for initial init
                 center_lat = (min_lat + max_lat) / 2
                 center_lon = (min_lon + max_lon) / 2
                 
-                # Check if single point (or very close points)
                 is_single_point = (max_lat - min_lat < 0.001) and (max_lon - min_lon < 0.001)
             else:
                 center_lat, center_lon = 35.62, 135.06 # Default Kyotango
@@ -794,19 +775,47 @@ with tab_manage:
             
             folium.LayerControl().add_to(m_portfolio)
             
+            # ------------------------------------------------------------------
+            # [FIXED] Marker Logic: NO MarkerCluster, Correct Indentation
+            # ------------------------------------------------------------------
+            
+            all_coords = []
+            
+            for index, row in valid_df.iterrows():
+                # Color & Icon Logic
+                status = row['status']
+                if status == "購入済み":
+                    color = "red"
+                    icon_name = "home"
+                elif status == "検討中":
+                    color = "blue"
+                    icon_name = "info-sign"
+                elif status == "見送り":
+                    color = "black"
+                    icon_name = "remove"
+                elif status == "未内見":
+                    color = "gray"
+                    icon_name = "question"
+                else:
+                    color = "orange"
+                    icon_name = "star"
+                
+                # Directly add to map (m_portfolio)
                 folium.Marker(
                     [row['latitude'], row['longitude']],
                     popup=f"<b>{row['title']}</b><br>価格: {row['price']}万円<br>利回り: {row['roi']}%",
                     tooltip=f"{row['title']} ({status})",
                     icon=folium.Icon(color=color, icon=icon_name)
                 ).add_to(m_portfolio)
+                
+                all_coords.append([row['latitude'], row['longitude']])
             
-            # Fit bounds if multiple properties exist
-            if not valid_df.empty and not is_single_point:
-                # Add a small buffer to the bounds
-                m_portfolio.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
+            # Auto-Fit Bounds
+            if all_coords:
+                m_portfolio.fit_bounds(all_coords)
+
+            # ------------------------------------------------------------------
             
-            # Debug Info
             # Render Map & Capture Click
             map_data = st_folium(m_portfolio, width="100%", height=400, returned_objects=["last_object_clicked"])
 
@@ -815,17 +824,13 @@ with tab_manage:
                 st.write(f"Valid Properties: {len(valid_df)}")
                 if not valid_df.empty:
                     st.write(f"Bounds: [{min_lat}, {min_lon}] - [{max_lat}, {max_lon}]")
-                    st.write(f"Is Single Point: {is_single_point}")
-                else:
-                    st.write("No valid properties found.")
 
             # Handle Map Click
             if map_data and map_data.get("last_object_clicked"):
                 clicked_lat = map_data["last_object_clicked"]["lat"]
                 clicked_lng = map_data["last_object_clicked"]["lng"]
                 
-                # Find closest property (simple exact match or very close proximity)
-                # For robustness, we check for very small difference
+                # Find closest property
                 clicked_prop = valid_df[
                     (valid_df['latitude'].between(clicked_lat - 0.0001, clicked_lat + 0.0001)) & 
                     (valid_df['longitude'].between(clicked_lng - 0.0001, clicked_lng + 0.0001))
@@ -835,7 +840,9 @@ with tab_manage:
                     prop_id = clicked_prop.iloc[0]['id']
                     st.session_state.selected_property_id = int(prop_id)
                     st.toast(f"物件を選択しました: {clicked_prop.iloc[0]['title']}")
-                    # Optional: Auto-redirect or just update selection
+                    # Optional: Auto-redirect
+                    # st.session_state.view_mode = "detail"
+                    # st.rerun()
             
             st.markdown("---")
             st.markdown("#### 📋 物件一覧")
@@ -861,12 +868,9 @@ with tab_manage:
             # Navigation Control
             col_sel, col_btn = st.columns([3, 1])
             with col_sel:
-                # Create a label map for selection
                 options = {f"{row['id']}: {row['title']} ({row['status']})": row['id'] for index, row in df.iterrows()}
-                # Ensure selected_property_id is valid for the selectbox
                 current_index = 0
                 if st.session_state.selected_property_id:
-                    # Find key for current ID
                     for i, (k, v) in enumerate(options.items()):
                         if v == st.session_state.selected_property_id:
                             current_index = i
@@ -893,7 +897,6 @@ with tab_manage:
             with st.expander("🗑️ 一括削除 (Bulk Delete)"):
                 st.warning("選択した物件を完全に削除します。この操作は取り消せません。")
                 
-                # Multiselect for deletion
                 delete_options = {f"{row['id']}: {row['title']}": row['id'] for index, row in df.iterrows()}
                 selected_delete_keys = st.multiselect(
                     "削除する物件を選択してください",
@@ -920,7 +923,6 @@ with tab_manage:
                 st.session_state.view_mode = "list"
                 st.rerun()
             
-            # Get selected property data
             selected_row = df[df['id'] == st.session_state.selected_property_id].iloc[0]
             
             # Back Button
@@ -943,13 +945,8 @@ with tab_manage:
                     key="status_selector_detail"
                 )
                 
-                # Update Button
                 if st.button("💾 変更を保存", type="primary", key="save_status_btn"):
                     update_property(selected_row['id'], "status", new_status)
-                    # Also save memo here if needed, but memo has its own save button below. 
-                    # Let's keep them separate for now or combine? 
-                    # User asked for "update button like right top". 
-                    # Let's make this button save status.
                     st.toast("ステータスを更新しました！")
                     time.sleep(0.5)
                     st.rerun()
@@ -962,38 +959,31 @@ with tab_manage:
 
             # Map & Location Fix
             with st.expander("📍 地図・位置情報修正", expanded=True):
-                # Map
                 lat = selected_row['latitude']
                 lon = selected_row['longitude']
                 
-                # Handle NaN/None coordinates
                 if pd.isna(lat) or pd.isna(lon) or lat == 0 or lon == 0:
                     st.warning("⚠️ 座標が設定されていません。手動で入力するか、住所から再取得してください。")
-                    # Default to Kyotango City Hall for display
                     map_lat, map_lon = 35.62, 135.06
                     has_valid_coords = False
                 else:
                     map_lat, map_lon = lat, lon
                     has_valid_coords = True
 
-                # Manual Fix Logic with Click-to-Relocate
                 st.markdown("##### 座標の手動修正")
                 st.info("🗺 地図をタップして、ピンを正しい建物の真上に移動させてください")
 
-                # Initialize session state for inputs if not set or if property changed
                 if "fix_lat" not in st.session_state or st.session_state.get("fix_prop_id") != selected_row['id']:
                     st.session_state.fix_lat = selected_row['latitude'] if pd.notna(selected_row['latitude']) else 0.0
                     st.session_state.fix_lon = selected_row['longitude'] if pd.notna(selected_row['longitude']) else 0.0
                     st.session_state.fix_prop_id = selected_row['id']
 
-                # Use session state coordinates for map display to reflect manual fixes immediately
                 display_lat = st.session_state.fix_lat if st.session_state.fix_lat != 0 else map_lat
                 display_lon = st.session_state.fix_lon if st.session_state.fix_lon != 0 else map_lon
 
-                # Map Configuration (Satellite)
                 m_detail = folium.Map(
                     location=[display_lat, display_lon], 
-                    zoom_start=18, # Closer zoom for satellite
+                    zoom_start=18,
                     tiles='Esri.WorldImagery',
                     attr='Esri',
                     height=400
@@ -1006,21 +996,17 @@ with tab_manage:
                         icon=folium.Icon(color="red" if selected_row['status'] == "購入済み" else "blue")
                     ).add_to(m_detail)
                 
-                # Render Map & Capture Click
                 map_data = st_folium(m_detail, width="100%", height=400, returned_objects=["last_clicked"])
                 
-                # Handle Map Click
                 if map_data and map_data.get("last_clicked"):
                     clicked_lat = map_data["last_clicked"]["lat"]
                     clicked_lng = map_data["last_clicked"]["lng"]
                     
-                    # Update session state if clicked
                     if abs(clicked_lat - st.session_state.fix_lat) > 0.000001 or abs(clicked_lng - st.session_state.fix_lon) > 0.000001:
                         st.session_state.fix_lat = clicked_lat
                         st.session_state.fix_lon = clicked_lng
                         st.rerun()
 
-                # Input Fields (Synced with Session State)
                 c_lat, c_lon, c_btn = st.columns([2, 2, 1])
                 with c_lat:
                     new_lat = st.number_input("Latitude", value=st.session_state.fix_lat, format="%.6f", key="input_fix_lat")
@@ -1036,7 +1022,6 @@ with tab_manage:
                         time.sleep(0.5)
                         st.rerun()
 
-                
                 if st.button("住所から座標を再取得 (京都府付与)"):
                     coords = get_coords_from_address(selected_row['address'])
                     if coords:
@@ -1071,7 +1056,6 @@ with tab_manage:
                 else:
                     st.info("写真はまだありません。")
 
-                # Add More Photos
                 st.markdown("##### ➕ 写真を追加")
                 new_photos = st.file_uploader("追加の写真を選択", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True, key="add_photos_manage")
                 if new_photos:
@@ -1090,21 +1074,17 @@ with tab_manage:
             uploaded_files = st.file_uploader("写真や音声を追加して再鑑定 (Driveへ自動保存)", accept_multiple_files=True, key="detail_uploader")
             
             if uploaded_files:
-                # 1. Auto Backup
-                # if DRIVE_ENABLED and os.path.exists('credentials.json'): # Removed check
                 with st.spinner("Google Driveへバックアップ中..."):
                     for f in uploaded_files:
                         f.seek(0)
                         res = upload_file_to_drive(f, f.name, selected_row['address'])
                     st.toast("バックアップ完了！")
                 
-                # 2. Re-Analyze Button
                 if st.button("🔄 追加資料を含めて再鑑定"):
                     if not api_key:
                         st.error("APIキーが必要です。")
                     else:
                         with st.spinner("Gemini 1.5 Flash が再分析中..."):
-                            # Parse current details
                             current_details = {}
                             try: current_details = json.loads(selected_row['details_json'])
                             except: pass
@@ -1119,7 +1099,6 @@ with tab_manage:
                             if "error" in new_result:
                                 st.error(f"再解析エラー: {new_result['error']}")
                             else:
-                                # Update DB
                                 update_property(selected_row['id'], "price", new_result.get('price_listing', 0))
                                 update_property(selected_row['id'], "renovation_cost", new_result.get('renovation_estimate', 0))
                                 update_property(selected_row['id'], "roi", new_result.get('roi_estimate', 0.0))
@@ -1134,24 +1113,20 @@ with tab_manage:
             # Analysis & Memo
             st.markdown("#### 📝 分析・メモ")
             
-            # Parse Details JSON if available
             details = {}
-            try:
-                details = json.loads(selected_row['details_json'])
+            try: details = json.loads(selected_row['details_json'])
             except: pass
             
-            st.info(f"💡 **辛口アドバイス**: {selected_row['memo']}") # Using memo field for bitter advice initially saved
+            st.info(f"💡 **辛口アドバイス**: {selected_row['memo']}")
             if 'legal_risks' in selected_row and selected_row['legal_risks']:
                  st.warning(f"⚠️ **法的リスク**: {selected_row['legal_risks']}")
             
-            # Editable Memo
             st.markdown("##### 追記メモ")
             user_memo = st.text_area("自由にメモを残せます", value=selected_row['memo'], height=100, key="user_memo_area_detail")
             if st.button("メモを保存"):
                 update_property(selected_row['id'], "memo", user_memo)
                 st.toast("メモを保存しました！")
 
-            # Delete Button
             st.markdown("---")
             st.markdown("##### 🗑️ 物件の削除")
             with st.expander("削除メニューを開く"):
@@ -1163,7 +1138,6 @@ with tab_manage:
                     st.session_state.view_mode = "list"
                     time.sleep(1)
                     st.rerun()
-
 
 # --- Consultant Tab ---
 with tab_chat:
@@ -1187,9 +1161,7 @@ with tab_chat:
                 st.error("APIキーを設定してください。")
             else:
                 with st.spinner("コンサルタントが思考中..."):
-                    # Prepare Context
                     properties_df = get_all_properties()
-                    # Convert DF to a readable string summary
                     portfolio_summary = ""
                     if not properties_df.empty:
                         for _, row in properties_df.iterrows():
