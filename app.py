@@ -24,24 +24,12 @@ st.set_page_config(
 
 # =============== クラウド公開用：Secretsから認証ファイルを作成 ===============
 # これがないと、ネット上でGoogleログイン機能が動きません
-if "gcp_service_account" in st.secrets:
-    # ファイルが存在しない場合のみ作成（上書き防止）
+if "google_credentials_json" in st.secrets:
+    # ファイルが存在しない場合のみ作成
     if not os.path.exists("credentials.json"):
         with open("credentials.json", "w") as f:
-            # Secretsの中身をJSONファイルとして書き出す
-            # st.secrets["gcp_service_account"] はTOMLのセクションですが、
-            # Streamlitが自動的に辞書としてパースしてくれている場合と、文字列の場合があります。
-            # ここでは文字列(JSON文字列)として貼り付けられたケースを想定して処理します。
-            try:
-                # もしSecretsにJSON文字列としてそのまま貼ってある場合
-                secret_str = st.secrets["gcp_service_account"]
-                if isinstance(secret_str, str) and secret_str.strip().startswith("{"):
-                     f.write(secret_str)
-                else:
-                     # TOMLテーブルとしてパースされている場合
-                     json.dump(dict(st.secrets["gcp_service_account"]), f)
-            except Exception as e:
-                print(f"Error creating credentials.json: {e}")
+            # Secretsの文字列をそのままファイルに書き込む（一番確実な方法）
+            f.write(st.secrets["google_credentials_json"])
 # =========================================================================
 
 # Google Drive Imports
