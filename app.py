@@ -15,7 +15,7 @@ from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
 import google.generativeai as genai
 
-# --- Page Config (Must be first) ---
+# --- Page Config ---
 st.set_page_config(
     page_title="Kyotango Property Platform",
     page_icon="🏠",
@@ -26,13 +26,14 @@ st.set_page_config(
 # 🔐 認証情報をここに直書きします（ファイル読み込みエラー回避の最終手段）
 # =========================================================================
 CLIENT_CONFIG = {
-  "web": {
+  "installed": {  # "web" ではなく "installed" (Desktopアプリ) として扱います
     "client_id": "518109148856-ndtiiuuh4tqt0v2jnu92iemmi8734d6d.apps.googleusercontent.com",
     "project_id": "kyotango-app",
     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
     "token_uri": "https://oauth2.googleapis.com/token",
     "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-    "client_secret": "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"
+    "client_secret": "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",
+    "redirect_uris": ["urn:ietf:wg:oauth:2.0:oob", "http://localhost"]
   }
 }
 # =========================================================================
@@ -243,7 +244,7 @@ with st.sidebar:
     else:
         st.error("⚠️ Drive連携エラー")
     
-    st.info("Kyotango Property Platform v3.5")
+    st.info("Kyotango Property Platform v3.6 (Manual Auth)")
     
     if "credentials" in st.session_state and st.session_state.credentials:
         if st.button("🚪 ログアウト", use_container_width=True):
@@ -251,7 +252,7 @@ with st.sidebar:
             if os.path.exists('token.json'): os.remove('token.json')
             st.rerun()
 
-# --- Login Logic (No-File OOB Flow) ---
+# --- Login Logic (Manual Copy-Paste Flow) ---
 def check_login():
     if st.session_state.get("credentials") and st.session_state.credentials.valid: return True
     if os.path.exists('token.json'):
@@ -272,14 +273,12 @@ def login_ui():
     st.title("Kyotango Property Platform")
     st.info("👋 Googleアカウントでログインしてください")
     
-    # ファイルではなく、辞書(CLIENT_CONFIG)から直接認証フローを作る
-    # redirect_uri に 'urn:ietf:wg:oauth:2.0:oob' を指定することで
-    # 400エラーを防ぎ、コピペ認証モードにします。
+    # 手動コピー＆ペースト認証フロー
     try:
         flow = InstalledAppFlow.from_client_config(
             CLIENT_CONFIG, 
             SCOPES,
-            redirect_uri='urn:ietf:wg:oauth:2.0:oob'
+            redirect_uri='urn:ietf:wg:oauth:2.0:oob' # この魔法のURLがエラーを防ぎます
         )
         
         auth_url, _ = flow.authorization_url(prompt='consent')
@@ -287,7 +286,7 @@ def login_ui():
         st.markdown(f"### 手順：")
         st.markdown("1. 下のボタンを押してGoogle認証ページを開いてください。")
         st.link_button("👉 Google認証ページを開く", auth_url)
-        st.markdown("2. ログインして許可すると、**長い認証コード**が表示されます。")
+        st.markdown("2. ログインして許可すると、画面に**長い認証コード**が表示されます。")
         st.markdown("3. そのコードをコピーして、下の入力欄に貼り付けてください。")
         
         code = st.text_input("認証コードをここに貼り付け:")
