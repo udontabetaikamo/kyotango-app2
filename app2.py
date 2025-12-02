@@ -100,6 +100,12 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+def convert_secrets_to_dict(secrets_obj):
+    """Recursively convert Streamlit Secrets to a standard dict."""
+    if hasattr(secrets_obj, "items"):
+        return {k: convert_secrets_to_dict(v) for k, v in secrets_obj.items()}
+    return secrets_obj
+
 def login():
     st.title("Kyotango Property Platform")
     st.subheader("ログインが必要です")
@@ -107,7 +113,7 @@ def login():
     # Check for credentials in secrets if file doesn't exist (Cloud Support)
     if not os.path.exists('credentials.json') and "gcp_service_account" in st.secrets:
         with open('credentials.json', 'w') as f:
-            json.dump(dict(st.secrets["gcp_service_account"]), f)
+            json.dump(convert_secrets_to_dict(st.secrets["gcp_service_account"]), f)
 
     if not os.path.exists('credentials.json'):
         st.error("⚠️ credentials.json が見つかりません。管理者にお問い合わせください。")
@@ -219,11 +225,11 @@ def get_drive_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            # Check for credentials in secrets if file doesn't exist
+            # Check for credentials in secrets if file doesn't exist (Cloud Support)
             if not os.path.exists('credentials.json') and "gcp_service_account" in st.secrets:
                 # Create a temporary credentials.json from secrets
                 with open('credentials.json', 'w') as f:
-                    json.dump(dict(st.secrets["gcp_service_account"]), f)
+                    json.dump(convert_secrets_to_dict(st.secrets["gcp_service_account"]), f)
             
             if os.path.exists('credentials.json'):
                 flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
@@ -430,7 +436,7 @@ with st.sidebar:
     if not os.path.exists('credentials.json') and "gcp_service_account" in st.secrets:
         # Create a temporary credentials.json from secrets
         with open('credentials.json', 'w') as f:
-            json.dump(dict(st.secrets["gcp_service_account"]), f)
+            json.dump(convert_secrets_to_dict(st.secrets["gcp_service_account"]), f)
     
     if DRIVE_ENABLED:
         if os.path.exists('credentials.json'):
